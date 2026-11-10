@@ -1,0 +1,22 @@
+services:
+  dashboard:
+    build: .
+    container_name: asif-tech-global
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8765
+      GENERATED_VIDEO_PATH: /tmp/asif-tech-global-loop.mp4
+      ATG_DESIGN_SEQUENCE_PATH: /data/design-sequence.txt
+    ports:
+      - "127.0.0.1:8765:8765"
+    volumes:
+      - ./media:/media:ro
+      - atg-design-state:/data
+    init: true
+    stop_grace_period: 15s
+
+volumes:
+  atg-design-state:

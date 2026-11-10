@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b0d12">
+  <meta name="description" content="Asif Tech Global live-stream dashboard">
+  <title>Asif Tech Global — Live Dashboard</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Main navigation">
+      <a class="brand" href="#" aria-label="Asif Tech Global home">
+        <span class="brand-mark">A<span>+</span></span>
+        <span class="brand-name">asif tech <strong>global</strong></span>
+      </a>
+
+      <div class="workspace-label">CREATOR STUDIO</div>
+      <nav class="nav-list">
+        <a class="nav-item active" href="#overview"><span class="nav-icon">◫</span> Overview</a>
+        <a class="nav-item" href="#stream"><span class="nav-icon">◉</span> Live control room</a>
+        <a class="nav-item" href="#analytics"><span class="nav-icon">▥</span> Analytics</a>
+        <a class="nav-item" href="#chat"><span class="nav-icon">▤</span> Live chat <span class="nav-count">4</span></a>
+      </nav>
+
+      <div class="sidebar-bottom">
+        <div class="connection-card">
+          <span class="connection-dot"></span>
+          <div><strong>Demo workspace</strong><small>YouTube not connected</small></div>
+          <span class="connection-arrow">›</span>
+        </div>
+        <a class="nav-item" href="#settings"><span class="nav-icon">⚙</span> Settings</a>
+        <div class="profile">
+          <div class="avatar">AT</div>
+          <div class="profile-copy"><strong>Asif Tech Global</strong><small>Creator account</small></div>
+          <span class="more">•••</span>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main-content" id="overview">
+      <header class="topbar">
+        <div class="breadcrumb">Creator Studio <span>/</span> <strong>Overview</strong></div>
+        <div class="topbar-actions">
+          <span class="demo-pill"><span></span> DEMO MODE</span>
+          <button class="icon-button" aria-label="Notifications">♧<i></i></button>
+          <div class="avatar avatar-small">AT</div>
+        </div>
+      </header>
+
+      <section class="page-heading">
+        <div>
+          <p class="eyebrow"><span id="currentDate">TODAY</span><time id="currentTime" aria-label="Your local time"></time></p>
+          <h1><span id="greeting">Hello</span>, Asif <span class="wave">✦</span></h1>
+          <p class="subtitle">Your live-streaming command center. Everything is looking good.</p>
+        </div>
+        <button class="button button-primary" id="scheduleButton"><span>＋</span> Schedule a stream</button>
+      </section>
+
+      <div class="demo-notice" role="note">
+        <span class="notice-icon">i</span>
+        <span><strong>Preview workspace</strong> — YouTube analytics and chat are not connected, so live viewer and message counts are unavailable.</span>
+        <a href="#settings">Learn more <span>↗</span></a>
+      </div>
+
+      <section class="stats-grid" aria-label="Stream metrics">
+        <article class="stat-card">
+          <div class="stat-top"><span>LIVE VIEWERS</span><span class="stat-icon purple">◉</span></div>
+          <div class="stat-value unavailable">—</div>
+          <div class="stat-foot">Connect YouTube for viewer data</div>
+        </article>
+        <article class="stat-card">
+          <div class="stat-top"><span>PEAK VIEWERS</span><span class="stat-icon blue">⌁</span></div>
+          <div class="stat-value unavailable">—</div>
+          <div class="stat-foot">YouTube Analytics not connected</div>
+        </article>
+        <article class="stat-card">
+          <div class="stat-top"><span>CHAT MESSAGES</span><span class="stat-icon orange">▤</span></div>
+          <div class="stat-value unavailable">—</div>
+          <div class="stat-foot">Connect YouTube to view chat activity</div>
+        </article>
+        <article class="stat-card">
+          <div class="stat-top"><span>ENCODER STATUS</span><span class="stat-icon green">⌁</span></div>
+          <div class="stat-value"><span id="encoderStatus">Checking</span><span id="encoderStatusDot" class="health-dot status-idle" aria-hidden="true"></span></div>
+          <div class="stat-foot" id="encoderDetails">Waiting for server status</div>
+        </article>
+      </section>
+
+      <section class="content-grid" id="stream">
+        <article class="panel stream-panel">
+          <div class="panel-heading">
+            <div><h2>Live control room</h2><p>Preview, start, or stop your broadcast</p></div>
+            <span class="status-chip" id="streamStatus"><i></i> CHECKING</span>
+          </div>
+          <div class="video-preview">
+            <video id="loopPreviewVideo" class="loop-preview-video" controls muted playsinline preload="metadata" aria-label="Generated live-stream video preview"></video>
+            <div class="preview-glow"></div>
+            <div class="preview-brand"><span class="brand-mark mini-mark">A<span>+</span></span><span>ASIF TECH <b>GLOBAL</b></span></div>
+            <div class="preview-center">
+              <button class="play-button" id="previewButton" aria-label="Play generated loop preview">▶</button>
+              <strong id="previewMessage">Checking server stream</strong>
+              <span id="previewDesignMessage">Rotating ATG hologram · new design on every preview</span>
+            </div>
+            <div class="preview-bottom"><span>◉ &nbsp; <span id="previewResolution">1280 × 720</span> · <span id="previewDesignId">NEW DESIGN</span></span><span id="previewAspect">16:9 · Horizontal</span></div>
+          </div>
+          <div class="format-control">
+            <div class="format-heading"><strong>STREAM FORMAT</strong><span>Choose before starting your broadcast</span></div>
+            <div class="format-options" role="group" aria-label="Live stream orientation">
+              <button class="format-option active" type="button" data-stream-format="horizontal" aria-pressed="true">
+                <span class="format-icon landscape-icon" aria-hidden="true"></span>
+                <span><strong>Horizontal</strong><small>16:9 · YouTube</small></span>
+              </button>
+              <button class="format-option" type="button" data-stream-format="vertical" aria-pressed="false">
+                <span class="format-icon portrait-icon" aria-hidden="true"></span>
+                <span><strong>Vertical</strong><small>9:16 · Shorts / mobile</small></span>
+              </button>
+            </div>
+            <p class="format-hint" id="formatHint" aria-live="polite">Horizontal 16:9 selected · 1280 × 720</p>
+          </div>
+          <div class="stream-meta">
+            <div><span class="meta-label">STREAM TITLE</span><strong>AI Tools That Will Change Everything</strong></div>
+            <button class="edit-button" id="editTitleButton" aria-label="Edit stream title">✎</button>
+          </div>
+          <div class="stream-actions">
+            <button class="button button-primary start-button" id="startButton" type="button" disabled><span class="record-dot"></span> Checking stream</button>
+            <button class="button button-secondary" id="copyLinkButton"><span>↗</span> Copy stream link</button>
+            <button class="button button-secondary stop-button" id="stopButton" type="button" hidden>Stop Live</button>
+            <span class="action-hint" id="actionHint">Save your key, then press Start Live. The stream will not start until you do.</span>
+          </div>
+        </article>
+
+        <article class="panel analytics-panel" id="analytics">
+          <div class="panel-heading">
+            <div><h2>Audience overview</h2><p>YouTube audience analytics</p></div>
+          </div>
+          <div class="analytics-empty" role="status">
+            <span class="analytics-empty-icon" aria-hidden="true">⌁</span>
+            <strong>Live analytics unavailable</strong>
+            <span>Connect a YouTube Data API integration to display real viewers, peak audience, chat, and stream health here.</span>
+          </div>
+        </article>
+      </section>
+
+      <section class="bottom-grid">
+        <article class="panel chat-panel" id="chat">
+          <div class="panel-heading">
+            <div><h2>Live chat</h2><p>Keep up with your community</p></div>
+            <span class="chat-live"><i></i> Chat preview</span>
+          </div>
+          <div class="chat-messages" id="chatMessages" aria-live="polite">
+            <div class="chat-message"><span class="chat-avatar violet">N</span><div><div class="chat-author">Nadia Khan <time>2:58 PM</time></div><p>This is so helpful! 🙌</p></div></div>
+            <div class="chat-message"><span class="chat-avatar teal">R</span><div><div class="chat-author">Rizwan Ali <time>2:59 PM</time></div><p>Can you share the tool names?</p></div></div>
+            <div class="chat-message"><span class="chat-avatar amber">F</span><div><div class="chat-author">Farah Tech <time>3:00 PM</time></div><p>Watching from Lahore 🇵🇰</p></div></div>
+            <div class="chat-message"><span class="chat-avatar pink">M</span><div><div class="chat-author">Muhammad Usman <time>3:01 PM</time></div><p>Great stream, Asif!</p></div></div>
+          </div>
+          <form class="chat-composer" id="chatForm">
+            <label class="sr-only" for="chatInput">Write a chat message</label>
+            <input id="chatInput" type="text" placeholder="Chat preview is not connected" maxlength="180">
+            <button type="submit" aria-label="Send message" disabled>↑</button>
+          </form>
+          <div class="chat-footnote">Preview only · messages are not sent to YouTube</div>
+        </article>
+
+        <article class="panel checklist-panel" id="settings">
+          <div class="panel-heading">
+            <div><h2>Before you go live</h2><p>A quick setup checklist</p></div>
+            <span class="check-count">1 of 4</span>
+          </div>
+          <div class="checklist">
+            <div class="check-item done"><span class="checkmark">✓</span><div><strong>Stream details</strong><small>Title and description are ready</small></div><span class="check-state">DONE</span></div>
+            <div class="check-item"><span class="checkmark"></span><div><strong>Connect YouTube</strong><small>Link your channel to continue</small></div><button class="text-button" id="connectButton">Connect <span>→</span></button></div>
+            <div class="check-item"><span class="checkmark"></span><div><strong>Check your setup</strong><small>Camera and microphone</small></div><span class="check-state pending">PENDING</span></div>
+            <div class="check-item"><span class="checkmark"></span><div><strong>Set audience & visibility</strong><small>Choose who can watch your stream</small></div><span class="check-state pending">PENDING</span></div>
+          </div>
+          <div class="checklist-footer"><span>Connect your YouTube account to finish setup.</span><span class="footer-arrow">↗</span></div>
+          <div class="stream-key-section">
+            <label for="streamKeyInput">YouTube stream key</label>
+            <p>Save the key here for this server session, or set <code>YOUTUBE_STREAM_KEY</code> in the server's private <code>.env</code> file.</p>
+            <div class="stream-key-controls">
+              <input id="streamKeyInput" type="password" placeholder="Paste stream key" autocomplete="new-password" spellcheck="false" aria-describedby="streamKeyHelp streamKeyStatus">
+              <button type="button" class="key-visibility" id="toggleKeyVisibility" aria-label="Show stream key" aria-pressed="false">Show</button>
+            </div>
+            <div class="key-actions">
+              <button type="button" class="text-button" id="saveStreamKeyButton">Save in local memory</button>
+              <button type="button" class="remove-key-button" id="removeStreamKeyButton">Remove key</button>
+              <span id="streamKeyStatus" class="key-status" role="status" aria-live="polite">No key saved</span>
+            </div>
+            <p class="stream-key-help" id="streamKeyHelp">On a hosted server, open this dashboard over HTTPS behind login protection before entering your key. The key stays in server memory and is never shown again. Press Start Live only when you are ready to broadcast.</p>
+          </div>
+        </article>
+      </section>
+      <footer class="footer"><span>© <span id="currentYear"></span> Asif Tech Global</span><span>Built for creators <b>♥</b></span><a href="#settings">Help & support</a></footer>
+    </main>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

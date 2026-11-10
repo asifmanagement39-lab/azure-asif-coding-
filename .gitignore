@@ -1,0 +1,6 @@
+.env
+media/*
+!media/README.md
+__pycache__/
+*.py[cod]
+.azure/

@@ -1,0 +1,11 @@
+.git
+.gitignore
+.azure
+__pycache__
+*.py[cod]
+.env
+.venv
+venv
+README.md
+test_server.py
+media
