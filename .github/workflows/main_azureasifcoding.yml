@@ -1,79 +1,113 @@
-name: Build and deploy container app to Azure Web App - azureasifcoding
+name: Test and deploy Azure container app
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
+env:
+  AZURE_WEBAPP_NAME: azureasifcoding
+  GHCR_IMAGE: ghcr.io/asifmanagement39-lab/asiftechglobal-live-dashboard
 
+jobs:
+  test:
+    runs-on: ubuntu-latest
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Run unit tests
+        run: python -m unittest -v
+
+  build:
+    if: github.event_name != 'pull_request'
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.repository_owner }}
+          username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push image
+      - name: Build and publish application image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/azure-asif-coding:${{ github.sha }}
+          labels: org.opencontainers.image.source=https://github.com/asifmanagement39-lab/azure-asif-coding-
+          tags: |
+            ${{ env.GHCR_IMAGE }}:${{ github.sha }}
+            ${{ env.GHCR_IMAGE }}:latest
 
   deploy:
-    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
     needs: build
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
-
     steps:
       - name: Log in to Azure
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_25BDDFF4C9844A88A65584D8CA7C8174 }}
-          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_38132390350849989413DF002B724FB6 }}
-          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_AD53279280AA4817A693CD5BFC9E0656 }}
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_D336CC54A06946868D0CBD9C46342715 }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_5E8283D0F727457BAFE37A5C60CD7991 }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_397F32F388CB4F77B9102D95B9045615 }}
 
-      - name: Configure Azure Web App to use the image
+      - name: Configure container registry access and app port
         env:
-          IMAGE: ghcr.io/${{ github.repository_owner }}/azure-asif-coding:${{ github.sha }}
-          GHCR_USERNAME: ${{ github.repository_owner }}
-          GHCR_PAT: ${{ secrets.GHCR_PAT }}
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
         run: |
-          set -euo pipefail
-
-          az webapp config container set \
-            --name azureasifcoding \
-            --resource-group azureasifcoding \
-            --docker-custom-image-name "$IMAGE" \
-            --docker-registry-server-url https://ghcr.io \
-            --docker-registry-server-user "$GHCR_USERNAME" \
-            --docker-registry-server-password "$GHCR_PAT"
-
+          if [ -z "$GHCR_USERNAME" ] || [ -z "$GHCR_READ_TOKEN" ]; then
+            echo "::error::Set the GHCR_USERNAME and GHCR_READ_TOKEN repository secrets."
+            exit 1
+          fi
+          RESOURCE_GROUP=$(az webapp show \
+            --name "$AZURE_WEBAPP_NAME" \
+            --query resourceGroup \
+            --output tsv)
+          if [ -z "$RESOURCE_GROUP" ]; then
+            echo "::error::Azure Web App '$AZURE_WEBAPP_NAME' was not found."
+            exit 1
+          fi
           az webapp config appsettings set \
-            --name azureasifcoding \
-            --resource-group azureasifcoding \
-            --settings WEBSITES_PORT=8765
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$AZURE_WEBAPP_NAME" \
+            --settings \
+              "DOCKER_REGISTRY_SERVER_URL=https://ghcr.io" \
+              "DOCKER_REGISTRY_SERVER_USERNAME=$GHCR_USERNAME" \
+              "DOCKER_REGISTRY_SERVER_PASSWORD=$GHCR_READ_TOKEN" \
+              "WEBSITES_PORT=8765" \
+              "PORT=8765" \
+            --output none
 
-          az webapp restart \
-            --name azureasifcoding \
-            --resource-group azureasifcoding
+      - name: Deploy container to Azure Web App
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          slot-name: Production
+          images: ${{ env.GHCR_IMAGE }}:${{ github.sha }}

@@ -1,3 +1,6 @@
+import base64
+import binascii
+import hmac
 import json
 import os
 import signal
@@ -33,6 +36,25 @@ _PREVIEW_VIDEOS = OrderedDict()
 PREVIEW_CACHE_SIZE = 8
 
 
+def auto_start_stream_enabled():
+    return os.environ.get("AUTO_START_STREAM", "").strip().casefold() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def start_stream_worker(worker):
+    if auto_start_stream_enabled() and not worker.request_start():
+        print(
+            "AUTO_START_STREAM is enabled, but no YOUTUBE_STREAM_KEY is configured; "
+            "the broadcast was not started.",
+            flush=True,
+        )
+    worker.start()
+
+
 def build_ffmpeg_command(video_path, rtmp_url, stream_key, ffmpeg="ffmpeg", video_format="horizontal"):
     destination = f"{rtmp_url.rstrip('/')}/{stream_key}"
     width, height = video_dimensions(video_format)
@@ -41,6 +63,18 @@ def build_ffmpeg_command(video_path, rtmp_url, stream_key, ffmpeg="ffmpeg", vide
         "-hide_banner",
         "-loglevel",
         "error",
+        "-reconnect",
+        "1",
+        "-reconnect_at_eof",
+        "1",
+        "-reconnect_streamed",
+        "1",
+        "-reconnect_delay_max",
+        "30",
+        "-fflags",
+        "+genpts+discardcorrupt",
+        "-flags",
+        "+low_delay",
         "-stream_loop",
         "-1",
         "-re",
@@ -166,7 +200,7 @@ class StreamWorker:
             self._state = state
 
     def _run(self):
-        backoff = 2
+        backoff = 1
         while not self._stopping.is_set():
             if not self._requested.is_set():
                 self._set_state("idle")
@@ -333,10 +367,6 @@ class StreamWorker:
                 self._set_state("idle")
                 continue
 
-            if self._wake.is_set():
-                self._wake.clear()
-                continue
-
             if not (STREAM_KEY or os.environ.get("YOUTUBE_STREAM_KEY", "").strip()):
                 self._set_state("needs_stream_key")
                 self._requested.clear()
@@ -352,8 +382,191 @@ class StreamWorker:
             self._set_state("reconnecting")
             self._wake.wait(backoff)
             self._wake.clear()
-            backoff = min(backoff * 2, 60)
+            backoff = min(backoff * 2, 30)
         self._set_state("stopped")
+
+    def _run_iteration(self, backoff):
+        if not self._requested.is_set():
+            self._set_state("idle")
+            self._wake.wait()
+            self._wake.clear()
+            return backoff
+
+        stream_key = STREAM_KEY or os.environ.get("YOUTUBE_STREAM_KEY", "").strip()
+        custom_video = os.environ.get("VIDEO_PATH", "").strip()
+        stream_format = get_stream_format()
+        rtmp_url = os.environ.get(
+            "YOUTUBE_RTMP_URL", "rtmp://a.rtmp.youtube.com/live2"
+        ).strip()
+
+        if custom_video and not Path(custom_video).is_file():
+            self._set_state("needs_video")
+            self._wake.wait(1)
+            self._wake.clear()
+            return 1
+        ffmpeg = find_ffmpeg()
+        if ffmpeg is None:
+            self._set_state("ffmpeg_unavailable")
+            with self._lock:
+                self._last_error = "No FFmpeg executable was found on the server."
+            self._wake.wait(5)
+            self._wake.clear()
+            return 5
+
+        if not stream_key:
+            self._set_state("needs_stream_key")
+            self._wake.wait(1)
+            self._wake.clear()
+            return 1
+
+        if not rtmp_url.startswith(("rtmp://", "rtmps://")) or any(
+            char.isspace() for char in rtmp_url
+        ):
+            self._set_state("invalid_rtmp_url")
+            self._wake.wait(5)
+            self._wake.clear()
+            return 5
+
+        self._set_state("starting")
+        with self._lock:
+            self._last_error = None
+        generated_video = not custom_video
+        command = (
+            build_generated_ffmpeg_command(
+                rtmp_url,
+                stream_key,
+                ffmpeg=ffmpeg,
+                video_format=stream_format,
+            )
+            if generated_video
+            else build_ffmpeg_command(
+                custom_video,
+                rtmp_url,
+                stream_key,
+                ffmpeg=ffmpeg,
+                video_format=stream_format,
+            )
+        )
+        try:
+            process = subprocess.Popen(
+                command,
+                stdin=subprocess.PIPE if generated_video else subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                shell=False,
+                close_fds=True,
+            )
+        except OSError:
+            self._set_state("ffmpeg_unavailable")
+            with self._lock:
+                self._last_error = "FFmpeg could not be launched; verify the encoder path and permissions."
+            self._wake.wait(5)
+            self._wake.clear()
+            return 5
+
+        with self._lock:
+            self._process = process
+            self._state = "starting"
+
+        started_at = time.monotonic()
+        if generated_video:
+            design_error = False
+
+            def should_continue():
+                current_key = STREAM_KEY or os.environ.get("YOUTUBE_STREAM_KEY", "").strip()
+                return (
+                    not self._stopping.is_set()
+                    and self._requested.is_set()
+                    and current_key == stream_key
+                    and process.poll() is None
+                )
+
+            def update_stream_state():
+                if time.monotonic() - started_at >= STREAM_STARTUP_GRACE_SECONDS:
+                    self._set_state("streaming")
+
+            def update_current_design(seed):
+                with self._lock:
+                    self._design_seed = seed
+                    self._design_count += 1
+
+            width, height = video_dimensions(stream_format)
+            try:
+                stream_generated_designs(
+                    process,
+                    width,
+                    height,
+                    should_continue,
+                    fps=LIVE_FPS,
+                    on_frame=update_stream_state,
+                    on_design=update_current_design,
+                )
+            except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+                print(f"Live design generation failed: {error}", flush=True)
+                self._set_state("design_generation_failed")
+                with self._lock:
+                    self._last_error = (
+                        "A unique ATG design could not be created; check server storage and logs."
+                    )
+                design_error = True
+                self._stop_process(process)
+            finally:
+                if process.stdin and not process.stdin.closed:
+                    try:
+                        process.stdin.close()
+                    except OSError:
+                        pass
+            if process.poll() is None:
+                self._stop_process(process)
+        else:
+            while process.poll() is None:
+                if self._stopping.is_set() or not self._requested.is_set():
+                    self._stop_process(process)
+                    return backoff
+                current_key = STREAM_KEY or os.environ.get("YOUTUBE_STREAM_KEY", "").strip()
+                if current_key != stream_key:
+                    self._stop_process(process)
+                    return backoff
+                if time.monotonic() - started_at >= STREAM_STARTUP_GRACE_SECONDS:
+                    self._set_state("streaming")
+                self._wake.wait(1)
+                self._wake.clear()
+
+        with self._lock:
+            self._process = None
+            return_code = process.poll()
+
+        if generated_video and design_error:
+            if self._stopping.is_set() or not self._requested.is_set():
+                return backoff
+            self._set_state("design_generation_failed")
+            self._wake.wait(5)
+            self._wake.clear()
+            return 5
+
+        if self._stopping.is_set():
+            return backoff
+
+        if not self._requested.is_set():
+            self._set_state("idle")
+            return backoff
+
+        if not (STREAM_KEY or os.environ.get("YOUTUBE_STREAM_KEY", "").strip()):
+            self._set_state("needs_stream_key")
+            self._requested.clear()
+            return backoff
+
+        if return_code is not None:
+            with self._lock:
+                self._last_error = (
+                    f"FFmpeg exited with code {return_code}. Check the stream key, "
+                    "server network, and YouTube Live event settings."
+                )
+
+        self._set_state("reconnecting")
+        self._wake.wait(backoff)
+        self._wake.clear()
+        return min(backoff * 2, 30)
 
     @staticmethod
     def _stop_process(process):
@@ -390,12 +603,60 @@ class DashboardHandler(BaseHTTPRequestHandler):
     server_version = "AsifTechGlobal/1.0"
     sys_version = ""
 
+    def _require_dashboard_auth(self):
+        expected_password = os.environ.get("DASHBOARD_PASSWORD", "")
+        hosted = bool(os.environ.get("WEBSITE_SITE_NAME"))
+        if not expected_password and not hosted:
+            return True
+        if hosted and len(expected_password) < 16:
+            body = b"Set a dashboard password of at least 16 characters in Azure App Settings."
+            self.send_response(503)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+            return False
+
+        authorization = self.headers.get("Authorization", "")
+        scheme, separator, encoded_credentials = authorization.partition(" ")
+        valid_credentials = False
+        if separator and scheme.casefold() == "basic":
+            try:
+                credentials = base64.b64decode(encoded_credentials, validate=True).decode("utf-8")
+            except (binascii.Error, UnicodeDecodeError):
+                credentials = ""
+            username, delimiter, password = credentials.partition(":")
+            expected_username = os.environ.get("DASHBOARD_USERNAME", "asif")
+            valid_credentials = (
+                bool(expected_password)
+                and bool(delimiter)
+                and hmac.compare_digest(username.encode("utf-8"), expected_username.encode("utf-8"))
+                and hmac.compare_digest(password.encode("utf-8"), expected_password.encode("utf-8"))
+            )
+
+        if valid_credentials:
+            return True
+
+        body = b"Dashboard authentication is required."
+        self.send_response(401)
+        self.send_header("WWW-Authenticate", 'Basic realm="Asif Tech Global", charset="UTF-8"')
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+        return False
+
     def _send_json(self, status, payload):
         body = json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.end_headers()
         self.wfile.write(body)
 
@@ -451,9 +712,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return None
         return payload
 
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+        self.send_header("Access-Control-Max-Age", "86400")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def do_GET(self):
         parsed_path = urlsplit(self.path)
         path = parsed_path.path
+        if path != "/api/health" and not self._require_dashboard_auth():
+            return
         if path == "/api/loop-video":
             custom_video = os.environ.get("VIDEO_PATH", "").strip()
             preview_id = parse_qs(parsed_path.query).get("design", [None])[0]
@@ -626,6 +898,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         global STREAM_KEY, STREAM_FORMAT
 
+        if not self._require_dashboard_auth():
+            return
         if not self._is_local_request(require_origin=True):
             self._send_json(403, {"error": "Request origin is not allowed."})
             return
@@ -756,6 +1030,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def do_DELETE(self):
         global STREAM_KEY
 
+        if not self._require_dashboard_auth():
+            return
         if not self._is_local_request(require_origin=True):
             self._send_json(403, {"error": "Request origin is not allowed."})
             return
@@ -783,10 +1059,16 @@ def main():
     port = int(os.environ.get("PORT", "8765"))
     if host not in ("127.0.0.1", "0.0.0.0"):
         raise ValueError("HOST must be 127.0.0.1 or 0.0.0.0.")
+    if os.environ.get("WEBSITE_SITE_NAME") and len(os.environ.get("DASHBOARD_PASSWORD", "")) < 16:
+        print(
+            "Set DASHBOARD_PASSWORD to a secret of at least 16 characters in Azure App Settings "
+            "before using the dashboard.",
+            flush=True,
+        )
 
     server = DashboardServer((host, port), DashboardHandler)
     server.stream_worker = StreamWorker()
-    server.stream_worker.start()
+    start_stream_worker(server.stream_worker)
 
     def request_shutdown(_signum, _frame):
         threading.Thread(target=server.shutdown, daemon=True).start()
