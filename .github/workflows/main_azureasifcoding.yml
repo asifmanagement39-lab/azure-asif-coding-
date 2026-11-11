@@ -12,8 +12,7 @@ permissions:
 
 env:
   AZURE_WEBAPP_NAME: azureasifcoding
-  AZURE_RESOURCE_GROUP: azureasifcoding
-  GHCR_IMAGE: ghcr.io/asifmanagement39-lab/azure-asif-coding-
+  GHCR_IMAGE: ghcr.io/asifmanagement39-lab/asiftechglobal-live-dashboard
 
 jobs:
   test:
@@ -57,6 +56,7 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
+          labels: org.opencontainers.image.source=https://github.com/asifmanagement39-lab/azure-asif-coding-
           tags: |
             ${{ env.GHCR_IMAGE }}:${{ github.sha }}
             ${{ env.GHCR_IMAGE }}:latest
@@ -85,8 +85,16 @@ jobs:
             echo "::error::Set the GHCR_USERNAME and GHCR_READ_TOKEN repository secrets."
             exit 1
           fi
+          RESOURCE_GROUP=$(az webapp show \
+            --name "$AZURE_WEBAPP_NAME" \
+            --query resourceGroup \
+            --output tsv)
+          if [ -z "$RESOURCE_GROUP" ]; then
+            echo "::error::Azure Web App '$AZURE_WEBAPP_NAME' was not found."
+            exit 1
+          fi
           az webapp config appsettings set \
-            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --resource-group "$RESOURCE_GROUP" \
             --name "$AZURE_WEBAPP_NAME" \
             --settings \
               "DOCKER_REGISTRY_SERVER_URL=https://ghcr.io" \
