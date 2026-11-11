@@ -42,6 +42,9 @@ your own video instead, place it at `media/stream.mp4` and set
 `VIDEO_PATH=/media/stream.mp4` in the Compose service environment; a custom
 video takes precedence over the generated designs and will loop as supplied.
 Leave `VIDEO_PATH` unset to use continuously generated ATG designs.
+Live graphics are rendered and sent by the server, not by your computer or home
+internet connection. The generated YouTube stream targets a 2500 Kbps constant
+video bitrate with low-latency, low-CPU encoding.
 
 ## Linux server deployment with Docker Compose
 

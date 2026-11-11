@@ -707,6 +707,16 @@ class GeneratedLoopVideoTests(unittest.TestCase):
         self.assertIn("pipe:0", command)
         self.assertIn("720x1280", command)
         self.assertIn("anullsrc=channel_layout=stereo:sample_rate=44100", command)
+        self.assertEqual(command[command.index("-preset") + 1], "ultrafast")
+        self.assertEqual(command[command.index("-tune") + 1], "zerolatency")
+        self.assertEqual(command[command.index("-b:v") + 1], "2500k")
+        self.assertEqual(command[command.index("-minrate") + 1], "2500k")
+        self.assertEqual(command[command.index("-maxrate") + 1], "2500k")
+        self.assertEqual(command[command.index("-bufsize") + 1], "5000k")
+        self.assertEqual(
+            command[command.index("-x264-params") + 1],
+            "nal-hrd=cbr:force-cfr=1",
+        )
         self.assertEqual(command[command.index("-r") + 1], "30")
         self.assertNotIn("-stream_loop", command)
         self.assertNotIn("-t", command)
