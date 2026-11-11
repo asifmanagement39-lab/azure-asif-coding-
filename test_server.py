@@ -1,3 +1,4 @@
+import base64
 import http.client
 import json
 import os
@@ -100,6 +101,87 @@ class StreamKeyApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertNotIn(b"private-test-key", body)
         self.assertTrue(json.loads(body)["configured"])
+
+    def test_dashboard_requires_basic_auth_when_password_is_configured(self):
+        credentials = base64.b64encode(b"asif:correct-horse-battery-staple").decode("ascii")
+        with patch.dict(
+            os.environ,
+            {
+                "WEBSITE_SITE_NAME": "azureasifcoding",
+                "DASHBOARD_USERNAME": "asif",
+                "DASHBOARD_PASSWORD": "correct-horse-battery-staple",
+            },
+        ):
+            status, _ = self.request("GET", "/")
+            self.assertEqual(status, 401)
+
+            status, _ = self.request("GET", "/api/stream-status")
+            self.assertEqual(status, 401)
+
+            status, _ = self.request("POST", "/api/stream/start", headers=self.same_origin())
+            self.assertEqual(status, 401)
+
+            status, body = self.request(
+                "GET",
+                "/",
+                headers={"Authorization": f"Basic {credentials}"},
+            )
+            self.assertEqual(status, 200)
+            self.assertIn(b"Asif Tech Global", body)
+
+            status, body = self.request("GET", "/api/health")
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(body), {"ok": True})
+
+    def test_azure_authentication_requires_strong_configured_password(self):
+        credentials = base64.b64encode(b"asif:short").decode("ascii")
+        with patch.dict(os.environ, {"WEBSITE_SITE_NAME": "azureasifcoding"}, clear=True):
+            status, body = self.request("GET", "/")
+            self.assertEqual(status, 503)
+            self.assertIn(b"dashboard password", body.lower())
+
+        with patch.dict(
+            os.environ,
+            {
+                "WEBSITE_SITE_NAME": "azureasifcoding",
+                "DASHBOARD_USERNAME": "asif",
+                "DASHBOARD_PASSWORD": "correct-horse-battery-staple",
+            },
+        ):
+            status, _ = self.request(
+                "GET",
+                "/",
+                headers={"Authorization": f"Basic {credentials}"},
+            )
+            self.assertEqual(status, 401)
+
+    def test_auto_start_option_is_enabled_only_by_explicit_truthy_values(self):
+        for value in ("1", "true", "YES", "on"):
+            with self.subTest(value=value), patch.dict(os.environ, {"AUTO_START_STREAM": value}):
+                self.assertTrue(server.auto_start_stream_enabled())
+
+        for value in ("", "false", "0", "no"):
+            with self.subTest(value=value), patch.dict(os.environ, {"AUTO_START_STREAM": value}):
+                self.assertFalse(server.auto_start_stream_enabled())
+
+    def test_auto_start_requests_broadcast_before_worker_starts(self):
+        class FakeWorker:
+            def __init__(self):
+                self.requested = False
+                self.started = False
+
+            def request_start(self):
+                self.requested = True
+                return True
+
+            def start(self):
+                self.started = True
+
+        worker = FakeWorker()
+        with patch.dict(os.environ, {"AUTO_START_STREAM": "true"}):
+            server.start_stream_worker(worker)
+        self.assertTrue(worker.requested)
+        self.assertTrue(worker.started)
 
     def test_stream_format_can_be_selected_only_while_broadcast_is_stopped(self):
         status, body = self.request("GET", "/api/stream-format")

@@ -1,3 +1,6 @@
+import base64
+import binascii
+import hmac
 import json
 import os
 import signal
@@ -31,6 +34,25 @@ _STREAM_CONFIG_LOCK = threading.RLock()
 _PREVIEW_LOCK = threading.Lock()
 _PREVIEW_VIDEOS = OrderedDict()
 PREVIEW_CACHE_SIZE = 8
+
+
+def auto_start_stream_enabled():
+    return os.environ.get("AUTO_START_STREAM", "").strip().casefold() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def start_stream_worker(worker):
+    if auto_start_stream_enabled() and not worker.request_start():
+        print(
+            "AUTO_START_STREAM is enabled, but no YOUTUBE_STREAM_KEY is configured; "
+            "the broadcast was not started.",
+            flush=True,
+        )
+    worker.start()
 
 
 def build_ffmpeg_command(video_path, rtmp_url, stream_key, ffmpeg="ffmpeg", video_format="horizontal"):
@@ -390,6 +412,51 @@ class DashboardHandler(BaseHTTPRequestHandler):
     server_version = "AsifTechGlobal/1.0"
     sys_version = ""
 
+    def _require_dashboard_auth(self):
+        expected_password = os.environ.get("DASHBOARD_PASSWORD", "")
+        hosted = bool(os.environ.get("WEBSITE_SITE_NAME"))
+        if not expected_password and not hosted:
+            return True
+        if hosted and len(expected_password) < 16:
+            body = b"Set a dashboard password of at least 16 characters in Azure App Settings."
+            self.send_response(503)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+            return False
+
+        authorization = self.headers.get("Authorization", "")
+        scheme, separator, encoded_credentials = authorization.partition(" ")
+        valid_credentials = False
+        if separator and scheme.casefold() == "basic":
+            try:
+                credentials = base64.b64decode(encoded_credentials, validate=True).decode("utf-8")
+            except (binascii.Error, UnicodeDecodeError):
+                credentials = ""
+            username, delimiter, password = credentials.partition(":")
+            expected_username = os.environ.get("DASHBOARD_USERNAME", "asif")
+            valid_credentials = (
+                bool(expected_password)
+                and bool(delimiter)
+                and hmac.compare_digest(username.encode("utf-8"), expected_username.encode("utf-8"))
+                and hmac.compare_digest(password.encode("utf-8"), expected_password.encode("utf-8"))
+            )
+
+        if valid_credentials:
+            return True
+
+        body = b"Dashboard authentication is required."
+        self.send_response(401)
+        self.send_header("WWW-Authenticate", 'Basic realm="Asif Tech Global", charset="UTF-8"')
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+        return False
+
     def _send_json(self, status, payload):
         body = json.dumps(payload).encode("utf-8")
         self.send_response(status)
@@ -454,6 +521,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed_path = urlsplit(self.path)
         path = parsed_path.path
+        if path != "/api/health" and not self._require_dashboard_auth():
+            return
         if path == "/api/loop-video":
             custom_video = os.environ.get("VIDEO_PATH", "").strip()
             preview_id = parse_qs(parsed_path.query).get("design", [None])[0]
@@ -626,6 +695,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         global STREAM_KEY, STREAM_FORMAT
 
+        if not self._require_dashboard_auth():
+            return
         if not self._is_local_request(require_origin=True):
             self._send_json(403, {"error": "Request origin is not allowed."})
             return
@@ -756,6 +827,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def do_DELETE(self):
         global STREAM_KEY
 
+        if not self._require_dashboard_auth():
+            return
         if not self._is_local_request(require_origin=True):
             self._send_json(403, {"error": "Request origin is not allowed."})
             return
@@ -783,10 +856,16 @@ def main():
     port = int(os.environ.get("PORT", "8765"))
     if host not in ("127.0.0.1", "0.0.0.0"):
         raise ValueError("HOST must be 127.0.0.1 or 0.0.0.0.")
+    if os.environ.get("WEBSITE_SITE_NAME") and len(os.environ.get("DASHBOARD_PASSWORD", "")) < 16:
+        print(
+            "Set DASHBOARD_PASSWORD to a secret of at least 16 characters in Azure App Settings "
+            "before using the dashboard.",
+            flush=True,
+        )
 
     server = DashboardServer((host, port), DashboardHandler)
     server.stream_worker = StreamWorker()
-    server.stream_worker.start()
+    start_stream_worker(server.stream_worker)
 
     def request_shutdown(_signum, _frame):
         threading.Thread(target=server.shutdown, daemon=True).start()

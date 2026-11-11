@@ -14,7 +14,10 @@ server and survives Docker restarts as long as its state volume is kept. Press
 **Stop Live** to stop the encoder and
 disable reconnects. If the running process disconnects unexpectedly, FFmpeg
 retries with increasing delays. Docker Compose restarts the service after a
-server or container restart; a person must press **Start Live** again afterward.
+server or container restart. Set `AUTO_START_STREAM=true` on an always-on server
+to resume broadcasting after an app/container restart when
+`YOUTUBE_STREAM_KEY` is configured. A restart can still briefly interrupt the
+YouTube broadcast.
 
 Choose **Horizontal (16:9, 1280 × 720)** or **Vertical (9:16, 720 × 1280)**
 in the control room before starting. The selection applies to the generated
@@ -51,7 +54,9 @@ it resets the sequence.
    stream at `media/stream.mp4` and configure `VIDEO_PATH=/media/stream.mp4`.
    Otherwise the service generates its own graphic loop.
 3. Copy `.env.example` to `.env` and set `YOUTUBE_STREAM_KEY` to the stream key
-   from YouTube Studio. Keep this secret file private:
+   from YouTube Studio. Set `AUTO_START_STREAM=true` to resume after server
+   restarts. Set a unique `DASHBOARD_PASSWORD` (at least 16 characters) before
+   exposing the dashboard. Keep this secret file private:
 
    ```sh
    cp .env.example .env
@@ -68,10 +73,10 @@ it resets the sequence.
 
    The environment key stays on the server and is not returned by the status
    API. Alternatively, leave it empty and enter the key in the dashboard.
-5. On the server, open `http://127.0.0.1:8765`; or put an HTTPS reverse proxy
-   with login/authentication in front of this loopback address. Protect the
-   dashboard **and every API route** with authentication. Keep the stream-key
-   form behind HTTPS. Do not publish port 8765 directly to the internet.
+5. On the server, open `http://127.0.0.1:8765`; or use an HTTPS reverse proxy.
+   The configured dashboard username/password protects the dashboard and every
+   API route. Do not expose the stream-key form over plain HTTP or publish port
+   8765 directly to the internet.
 6. Paste your YouTube stream key into **Before you go live → YouTube stream
    key**, choose **Save key**, then press **Start Live**. Press **Stop Live**
    to stop broadcasting. A dashboard-entered key stays only in server memory
@@ -87,6 +92,41 @@ The dashboard date, greeting, and clock use the viewer's local time zone and
 update automatically. Viewer, peak-viewer, and chat analytics are shown as
 unavailable until a YouTube Data API integration is configured; encoder status
 and selected output resolution are reported from the local streaming service.
+
+## Azure App Service (Linux container)
+
+The Web App must run this repository's Docker image; a static-site container
+does not run the encoder. Configure the Web App container to use an image built
+from this repository's `Dockerfile`, set **Always On** to **On**, and keep the
+instance count at **1** so multiple app replicas do not broadcast to the same
+YouTube event. The Basic (B1) plan supports Always On.
+
+Under **Settings → Environment variables → App settings**, add these settings
+and save/restart the Web App:
+
+| Setting | Value |
+|---------|-------|
+| `WEBSITES_PORT` | `8765` |
+| `PORT` | `8765` |
+| `AUTO_START_STREAM` | `true` |
+| `YOUTUBE_STREAM_KEY` | The key from YouTube Studio; enter it as a secret Azure App Setting |
+| `DASHBOARD_USERNAME` | Your private dashboard username |
+| `DASHBOARD_PASSWORD` | A unique password with at least 16 characters |
+
+Azure App Service requires `DASHBOARD_PASSWORD`; the dashboard and all API
+routes except the health probe use HTTP Basic authentication over the Web
+App's HTTPS endpoint. Your browser will show a sign-in prompt. Do not put the
+stream key or dashboard password in GitHub, source files, a Docker image, or
+screenshots. Rotate a key/password immediately if exposed.
+
+After saving app settings, restart the Web App and verify the encoder status
+and YouTube Studio. A running Azure Web App keeps streaming when your PC or
+phone is off, but deployments, platform maintenance, network failures, and
+YouTube interruptions can still disconnect the broadcast. `AUTO_START_STREAM`
+restarts it when the app process comes back; it does not prevent downtime.
+The default generated broadcast is ATG motion graphics, not a camera feed
+from your powered-off device. To broadcast your own video, provide a licensed
+video to the server and configure `VIDEO_PATH` as described above.
 
 ## Change or remove the server stream key
 
