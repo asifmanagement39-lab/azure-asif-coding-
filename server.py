@@ -367,10 +367,6 @@ class StreamWorker:
                 self._set_state("idle")
                 continue
 
-            if self._wake.is_set():
-                self._wake.clear()
-                continue
-
             if not (STREAM_KEY or os.environ.get("YOUTUBE_STREAM_KEY", "").strip()):
                 self._set_state("needs_stream_key")
                 self._requested.clear()
@@ -386,8 +382,191 @@ class StreamWorker:
             self._set_state("reconnecting")
             self._wake.wait(backoff)
             self._wake.clear()
-            backoff = min(backoff * 2, 60)
+            backoff = min(backoff * 2, 30)
         self._set_state("stopped")
+
+    def _run_iteration(self, backoff):
+        if not self._requested.is_set():
+            self._set_state("idle")
+            self._wake.wait()
+            self._wake.clear()
+            return backoff
+
+        stream_key = STREAM_KEY or os.environ.get("YOUTUBE_STREAM_KEY", "").strip()
+        custom_video = os.environ.get("VIDEO_PATH", "").strip()
+        stream_format = get_stream_format()
+        rtmp_url = os.environ.get(
+            "YOUTUBE_RTMP_URL", "rtmp://a.rtmp.youtube.com/live2"
+        ).strip()
+
+        if custom_video and not Path(custom_video).is_file():
+            self._set_state("needs_video")
+            self._wake.wait(1)
+            self._wake.clear()
+            return 1
+        ffmpeg = find_ffmpeg()
+        if ffmpeg is None:
+            self._set_state("ffmpeg_unavailable")
+            with self._lock:
+                self._last_error = "No FFmpeg executable was found on the server."
+            self._wake.wait(5)
+            self._wake.clear()
+            return 5
+
+        if not stream_key:
+            self._set_state("needs_stream_key")
+            self._wake.wait(1)
+            self._wake.clear()
+            return 1
+
+        if not rtmp_url.startswith(("rtmp://", "rtmps://")) or any(
+            char.isspace() for char in rtmp_url
+        ):
+            self._set_state("invalid_rtmp_url")
+            self._wake.wait(5)
+            self._wake.clear()
+            return 5
+
+        self._set_state("starting")
+        with self._lock:
+            self._last_error = None
+        generated_video = not custom_video
+        command = (
+            build_generated_ffmpeg_command(
+                rtmp_url,
+                stream_key,
+                ffmpeg=ffmpeg,
+                video_format=stream_format,
+            )
+            if generated_video
+            else build_ffmpeg_command(
+                custom_video,
+                rtmp_url,
+                stream_key,
+                ffmpeg=ffmpeg,
+                video_format=stream_format,
+            )
+        )
+        try:
+            process = subprocess.Popen(
+                command,
+                stdin=subprocess.PIPE if generated_video else subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                shell=False,
+                close_fds=True,
+            )
+        except OSError:
+            self._set_state("ffmpeg_unavailable")
+            with self._lock:
+                self._last_error = "FFmpeg could not be launched; verify the encoder path and permissions."
+            self._wake.wait(5)
+            self._wake.clear()
+            return 5
+
+        with self._lock:
+            self._process = process
+            self._state = "starting"
+
+        started_at = time.monotonic()
+        if generated_video:
+            design_error = False
+
+            def should_continue():
+                current_key = STREAM_KEY or os.environ.get("YOUTUBE_STREAM_KEY", "").strip()
+                return (
+                    not self._stopping.is_set()
+                    and self._requested.is_set()
+                    and current_key == stream_key
+                    and process.poll() is None
+                )
+
+            def update_stream_state():
+                if time.monotonic() - started_at >= STREAM_STARTUP_GRACE_SECONDS:
+                    self._set_state("streaming")
+
+            def update_current_design(seed):
+                with self._lock:
+                    self._design_seed = seed
+                    self._design_count += 1
+
+            width, height = video_dimensions(stream_format)
+            try:
+                stream_generated_designs(
+                    process,
+                    width,
+                    height,
+                    should_continue,
+                    fps=LIVE_FPS,
+                    on_frame=update_stream_state,
+                    on_design=update_current_design,
+                )
+            except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+                print(f"Live design generation failed: {error}", flush=True)
+                self._set_state("design_generation_failed")
+                with self._lock:
+                    self._last_error = (
+                        "A unique ATG design could not be created; check server storage and logs."
+                    )
+                design_error = True
+                self._stop_process(process)
+            finally:
+                if process.stdin and not process.stdin.closed:
+                    try:
+                        process.stdin.close()
+                    except OSError:
+                        pass
+            if process.poll() is None:
+                self._stop_process(process)
+        else:
+            while process.poll() is None:
+                if self._stopping.is_set() or not self._requested.is_set():
+                    self._stop_process(process)
+                    return backoff
+                current_key = STREAM_KEY or os.environ.get("YOUTUBE_STREAM_KEY", "").strip()
+                if current_key != stream_key:
+                    self._stop_process(process)
+                    return backoff
+                if time.monotonic() - started_at >= STREAM_STARTUP_GRACE_SECONDS:
+                    self._set_state("streaming")
+                self._wake.wait(1)
+                self._wake.clear()
+
+        with self._lock:
+            self._process = None
+            return_code = process.poll()
+
+        if generated_video and design_error:
+            if self._stopping.is_set() or not self._requested.is_set():
+                return backoff
+            self._set_state("design_generation_failed")
+            self._wake.wait(5)
+            self._wake.clear()
+            return 5
+
+        if self._stopping.is_set():
+            return backoff
+
+        if not self._requested.is_set():
+            self._set_state("idle")
+            return backoff
+
+        if not (STREAM_KEY or os.environ.get("YOUTUBE_STREAM_KEY", "").strip()):
+            self._set_state("needs_stream_key")
+            self._requested.clear()
+            return backoff
+
+        if return_code is not None:
+            with self._lock:
+                self._last_error = (
+                    f"FFmpeg exited with code {return_code}. Check the stream key, "
+                    "server network, and YouTube Live event settings."
+                )
+
+        self._set_state("reconnecting")
+        self._wake.wait(backoff)
+        self._wake.clear()
+        return min(backoff * 2, 30)
 
     @staticmethod
     def _stop_process(process):
