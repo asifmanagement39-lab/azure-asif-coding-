@@ -63,6 +63,18 @@ def build_ffmpeg_command(video_path, rtmp_url, stream_key, ffmpeg="ffmpeg", vide
         "-hide_banner",
         "-loglevel",
         "error",
+        "-reconnect",
+        "1",
+        "-reconnect_at_eof",
+        "1",
+        "-reconnect_streamed",
+        "1",
+        "-reconnect_delay_max",
+        "30",
+        "-fflags",
+        "+genpts+discardcorrupt",
+        "-flags",
+        "+low_delay",
         "-stream_loop",
         "-1",
         "-re",
@@ -188,7 +200,7 @@ class StreamWorker:
             self._state = state
 
     def _run(self):
-        backoff = 2
+        backoff = 1
         while not self._stopping.is_set():
             if not self._requested.is_set():
                 self._set_state("idle")
@@ -463,6 +475,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.end_headers()
         self.wfile.write(body)
 
@@ -517,6 +532,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send_json(400, {"error": "Request body must be a JSON object."})
             return None
         return payload
+
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+        self.send_header("Access-Control-Max-Age", "86400")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def do_GET(self):
         parsed_path = urlsplit(self.path)

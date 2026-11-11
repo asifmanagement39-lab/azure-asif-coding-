@@ -1,6 +1,44 @@
 const toast = document.querySelector('#toast');
 let toastTimer;
 
+// Dashboard authentication (HTTP Basic Auth)
+// Credentials are stored in localStorage after the user enters them once.
+const STORAGE_KEY_USER = 'atg_dashboard_user';
+const STORAGE_KEY_PASS = 'atg_dashboard_pass';
+const STORAGE_KEY_STREAM_KEY = 'atg_stream_key';
+
+function getAuthHeader() {
+  const user = localStorage.getItem(STORAGE_KEY_USER);
+  const pass = localStorage.getItem(STORAGE_KEY_PASS);
+  if (!user || !pass) return null;
+  return 'Basic ' + btoa(user + ':' + pass);
+}
+
+function promptForCredentials() {
+  const user = localStorage.getItem(STORAGE_KEY_USER);
+  const pass = localStorage.getItem(STORAGE_KEY_PASS);
+  if (user && pass) return true;
+  const enteredUser = prompt('Enter dashboard username (set in Azure App Settings DASHBOARD_USERNAME):');
+  if (!enteredUser) return false;
+  const enteredPass = prompt('Enter dashboard password:');
+  if (!enteredPass) return false;
+  localStorage.setItem(STORAGE_KEY_USER, enteredUser);
+  localStorage.setItem(STORAGE_KEY_PASS, enteredPass);
+  return true;
+}
+
+async function apiFetch(path, options = {}) {
+  if (!promptForCredentials()) {
+    const error = new Error('Authentication required');
+    error.status = 401;
+    throw error;
+  }
+  const headers = { ...(options.headers || {}) };
+  const auth = getAuthHeader();
+  if (auth) headers['Authorization'] = auth;
+  return fetch(path, { ...options, headers, cache: 'no-store' });
+}
+
 const currentYear = document.querySelector('#currentYear');
 const currentDate = document.querySelector('#currentDate');
 const currentTime = document.querySelector('#currentTime');
@@ -50,7 +88,7 @@ function setStreamKeyStatus(message, saved = false) {
 
 async function refreshStreamKeyStatus() {
   try {
-    const response = await fetch('/api/stream-key', { cache: 'no-store' });
+    const response = await apiFetch('/api/stream-key');
     if (!response.ok) {
       removeStreamKeyButton.disabled = true;
       setStreamKeyStatus(response.status === 403
@@ -86,17 +124,18 @@ saveStreamKeyButton.addEventListener('click', async () => {
   }
   saveStreamKeyButton.disabled = true;
   try {
-    const response = await fetch('/api/stream-key', {
+    const response = await apiFetch('/api/stream-key', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ key: value }),
-      cache: 'no-store'
     });
     if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
       setStreamKeyStatus('Key was not saved');
-      showToast('Local service rejected the key. Check it and try again.');
+      showToast(errorData.error || 'Local service rejected the key. Check it and try again.');
       return;
     }
+    localStorage.setItem(STORAGE_KEY_STREAM_KEY, value);
     streamKeyInput.value = '';
     streamKeyInput.type = 'password';
     toggleKeyVisibility.textContent = 'Show';
@@ -121,15 +160,15 @@ saveStreamKeyButton.addEventListener('click', async () => {
 removeStreamKeyButton.addEventListener('click', async () => {
   removeStreamKeyButton.disabled = true;
   try {
-    const response = await fetch('/api/stream-key', {
+    const response = await apiFetch('/api/stream-key', {
       method: 'DELETE',
-      cache: 'no-store'
     });
     if (!response.ok) {
       removeStreamKeyButton.disabled = false;
       showToast('Local service could not remove the key. Try again.');
       return;
     }
+    localStorage.removeItem(STORAGE_KEY_STREAM_KEY);
     streamKeyInput.value = '';
     streamKeyInput.type = 'password';
     toggleKeyVisibility.textContent = 'Show';
@@ -294,7 +333,7 @@ const streamStates = {
 
 async function refreshStreamStatus() {
   try {
-    const response = await fetch('/api/stream-status', { cache: 'no-store' });
+    const response = await apiFetch('/api/stream-status');
     if (!response.ok) {
       throw new TypeError('Stream status request failed.');
     }
@@ -386,11 +425,10 @@ for (const button of formatButtons) {
     }
     formatHint.textContent = 'Updating stream format…';
     try {
-      const response = await fetch('/api/stream-format', {
+      const response = await apiFetch('/api/stream-format', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ format: button.dataset.streamFormat }),
-        cache: 'no-store'
       });
       const result = await response.json();
       if (!response.ok) {
@@ -416,7 +454,7 @@ const stopButton = document.querySelector('#stopButton');
 startButton.addEventListener('click', async () => {
   startButton.disabled = true;
   try {
-    const response = await fetch('/api/stream/start', { method: 'POST', cache: 'no-store' });
+    const response = await apiFetch('/api/stream/start', { method: 'POST' });
     const result = await response.json();
     if (!response.ok) {
       showToast(result.error || 'Could not start the live stream.');
@@ -436,7 +474,7 @@ startButton.addEventListener('click', async () => {
 stopButton.addEventListener('click', async () => {
   stopButton.disabled = true;
   try {
-    const response = await fetch('/api/stream/stop', { method: 'POST', cache: 'no-store' });
+    const response = await apiFetch('/api/stream/stop', { method: 'POST' });
     const result = await response.json();
     if (!response.ok) {
       showToast(result.error || 'Could not stop the live stream.');
