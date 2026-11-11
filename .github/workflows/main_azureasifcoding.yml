@@ -1,63 +1,79 @@
-# Docs for the Azure Web Apps Deploy action: https://github.com/Azure/webapps-deploy
-# More GitHub Actions for Azure: https://github.com/Azure/actions
-
 name: Build and deploy container app to Azure Web App - azureasifcoding
 
 on:
   push:
     branches:
-      - 'main'
+      - main
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: read #This is required for actions/checkout
+      contents: read
+      packages: write
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out repository
+        uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@v3
 
-      - name: Log in to container registry
-        uses: docker/login-action@v2
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
         with:
-          registry: asifmanagement39-lab/
-          username: ${{ secrets.AZUREAPPSERVICE_CONTAINERUSERNAME_E16D4E23C5624FD88D4298575482932F }}
-          password: ${{ secrets.AZUREAPPSERVICE_CONTAINERPASSWORD_86E0338A5B3F4636BF1AF3406231B85C }}
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push container image to registry
-        uses: docker/build-push-action@v3
+      - name: Build and push image
+        uses: docker/build-push-action@v6
         with:
           context: .
-          push: true
-          tags: asifmanagement39-lab/${{ secrets.AZUREAPPSERVICE_CONTAINERUSERNAME_E16D4E23C5624FD88D4298575482932F }}/ghcr.io/asifmanagement39-lab/azure-asif-coding-:${{ github.sha }}
           file: ./Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/azure-asif-coding:${{ github.sha }}
 
   deploy:
     runs-on: ubuntu-latest
-    permissions:
-      id-token: write #This is required for requesting the JWT
-      contents: read #This is required for actions/checkout
-
     needs: build
-    
+    permissions:
+      contents: read
+      id-token: write
+
     steps:
-      
-      - name: Login to Azure
+      - name: Log in to Azure
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_25BDDFF4C9844A88A65584D8CA7C8174 }}
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_38132390350849989413DF002B724FB6 }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_AD53279280AA4817A693CD5BFC9E0656 }}
 
-      - name: Deploy to Azure Web App
-        id: deploy-to-webapp
-        uses: azure/webapps-deploy@v2
-        with:
-          app-name: 'azureasifcoding'
-          slot-name: 'Production'
-          images: 'asifmanagement39-lab/${{ secrets.AZUREAPPSERVICE_CONTAINERUSERNAME_E16D4E23C5624FD88D4298575482932F }}/ghcr.io/asifmanagement39-lab/azure-asif-coding-:${{ github.sha }}'
-          
+      - name: Configure Azure Web App to use the image
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/azure-asif-coding:${{ github.sha }}
+          GHCR_USERNAME: ${{ github.repository_owner }}
+          GHCR_PAT: ${{ secrets.GHCR_PAT }}
+        run: |
+          set -euo pipefail
+
+          az webapp config container set \
+            --name azureasifcoding \
+            --resource-group azureasifcoding \
+            --docker-custom-image-name "$IMAGE" \
+            --docker-registry-server-url https://ghcr.io \
+            --docker-registry-server-user "$GHCR_USERNAME" \
+            --docker-registry-server-password "$GHCR_PAT"
+
+          az webapp config appsettings set \
+            --name azureasifcoding \
+            --resource-group azureasifcoding \
+            --settings WEBSITES_PORT=8765
+
+          az webapp restart \
+            --name azureasifcoding \
+            --resource-group azureasifcoding
