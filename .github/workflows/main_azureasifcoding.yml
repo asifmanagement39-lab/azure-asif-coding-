@@ -1,30 +1,29 @@
-# Docs for the Azure Web Apps Deploy action: https://github.com/Azure/webapps-deploy
-# More GitHub Actions for Azure: https://github.com/Azure/actions
-
-name: Build and deploy container app to Azure Web App - azureasifcoding
+name: Test and deploy Azure container app
 
 on:
   push:
-    branches:
-      - 'main'
+    branches: [main]
   pull_request:
-    branches:
-      - 'main'
+    branches: [main]
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  AZURE_WEBAPP_NAME: azureasifcoding
+  AZURE_RESOURCE_GROUP: azureasifcoding
+  GHCR_IMAGE: ghcr.io/asifmanagement39-lab/azure-asif-coding-
 
 jobs:
   test:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
           cache: pip
 
       - name: Install dependencies
@@ -35,54 +34,71 @@ jobs:
 
   build:
     if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
     needs: test
+    runs-on: ubuntu-latest
     permissions:
-      contents: read #This is required for actions/checkout
-
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+      - uses: docker/setup-buildx-action@v3
 
-      - name: Log in to container registry
-        uses: docker/login-action@v2
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
         with:
-          registry: mcr.microsoft.com/
-          username: ${{ secrets.AZUREAPPSERVICE_CONTAINERUSERNAME_DB0490CB55A04364BF6B189C29A74E1C }}
-          password: ${{ secrets.AZUREAPPSERVICE_CONTAINERPASSWORD_EBAC7A20FB2F45F2AB25EE8C36AA8450 }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push container image to registry
-        uses: docker/build-push-action@v3
+      - name: Build and publish application image
+        uses: docker/build-push-action@v6
         with:
           context: .
-          push: true
-          tags: mcr.microsoft.com/${{ secrets.AZUREAPPSERVICE_CONTAINERUSERNAME_DB0490CB55A04364BF6B189C29A74E1C }}/appsvc/staticsite:${{ github.sha }}
           file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ env.GHCR_IMAGE }}:${{ github.sha }}
+            ${{ env.GHCR_IMAGE }}:latest
 
   deploy:
+    if: github.event_name != 'pull_request'
+    needs: build
     runs-on: ubuntu-latest
     permissions:
-      id-token: write #This is required for requesting the JWT
-      contents: read #This is required for actions/checkout
-
-    needs: build
-
+      contents: read
+      id-token: write
     steps:
-
-      - name: Login to Azure
+      - name: Log in to Azure
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_D336CC54A06946868D0CBD9C46342715 }}
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_5E8283D0F727457BAFE37A5C60CD7991 }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_397F32F388CB4F77B9102D95B9045615 }}
 
-      - name: Deploy to Azure Web App
-        id: deploy-to-webapp
-        uses: azure/webapps-deploy@v2
+      - name: Configure container registry access and app port
+        env:
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
+        run: |
+          if [ -z "$GHCR_USERNAME" ] || [ -z "$GHCR_READ_TOKEN" ]; then
+            echo "::error::Set the GHCR_USERNAME and GHCR_READ_TOKEN repository secrets."
+            exit 1
+          fi
+          az webapp config appsettings set \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$AZURE_WEBAPP_NAME" \
+            --settings \
+              "DOCKER_REGISTRY_SERVER_URL=https://ghcr.io" \
+              "DOCKER_REGISTRY_SERVER_USERNAME=$GHCR_USERNAME" \
+              "DOCKER_REGISTRY_SERVER_PASSWORD=$GHCR_READ_TOKEN" \
+              "WEBSITES_PORT=8765" \
+              "PORT=8765" \
+            --output none
+
+      - name: Deploy container to Azure Web App
+        uses: azure/webapps-deploy@v3
         with:
-          app-name: 'azureasifcoding'
-          slot-name: 'Production'
-          images: 'mcr.microsoft.com/${{ secrets.AZUREAPPSERVICE_CONTAINERUSERNAME_DB0490CB55A04364BF6B189C29A74E1C }}/appsvc/staticsite:${{ github.sha }}'
-          
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          slot-name: Production
+          images: ${{ env.GHCR_IMAGE }}:${{ github.sha }}

@@ -96,37 +96,50 @@ and selected output resolution are reported from the local streaming service.
 ## Azure App Service (Linux container)
 
 The Web App must run this repository's Docker image; a static-site container
-does not run the encoder. Configure the Web App container to use an image built
-from this repository's `Dockerfile`, set **Always On** to **On**, and keep the
-instance count at **1** so multiple app replicas do not broadcast to the same
-YouTube event. The Basic (B1) plan supports Always On.
+does not run the encoder. GitHub Actions builds this Dockerfile, publishes the
+image to GitHub Container Registry (GHCR), and deploys it to the
+`azureasifcoding` Web App. The registry settings and `WEBSITES_PORT=8765` are
+configured by the deployment workflow. The app uses the Azure URL shown in
+**App Service → Overview → Default domain**; GitHub Pages is not used for this
+Docker application.
 
-Under **Settings → Environment variables → App settings**, add these settings
-and save/restart the Web App:
+Before the first deployment, add these repository secrets in
+**GitHub → Settings → Secrets and variables → Actions**:
+
+| Secret | Value |
+|--------|-------|
+| `GHCR_USERNAME` | Your GitHub username |
+| `GHCR_READ_TOKEN` | A GitHub classic PAT with `read:packages` permission; keep it private |
+
+In **Azure Portal → Web App → Settings → Environment variables → App
+settings**, add the following and save:
 
 | Setting | Value |
 |---------|-------|
-| `WEBSITES_PORT` | `8765` |
-| `PORT` | `8765` |
-| `AUTO_START_STREAM` | `true` |
-| `YOUTUBE_STREAM_KEY` | The key from YouTube Studio; enter it as a secret Azure App Setting |
 | `DASHBOARD_USERNAME` | Your private dashboard username |
 | `DASHBOARD_PASSWORD` | A unique password with at least 16 characters |
+| `YOUTUBE_STREAM_KEY` | Optional YouTube Studio stream key; store only as an Azure secret app setting |
+| `AUTO_START_STREAM` | `true` only if you want the server to broadcast automatically whenever it starts |
 
-Azure App Service requires `DASHBOARD_PASSWORD`; the dashboard and all API
-routes except the health probe use HTTP Basic authentication over the Web
-App's HTTPS endpoint. Your browser will show a sign-in prompt. Do not put the
-stream key or dashboard password in GitHub, source files, a Docker image, or
-screenshots. Rotate a key/password immediately if exposed.
+Azure App Service requires `DASHBOARD_PASSWORD`; until it is configured, the
+dashboard returns an error instead of being exposed without authentication.
+The dashboard and all API routes except the health probe use HTTP Basic
+authentication over the Web App's HTTPS endpoint. Do not put the stream key
+or dashboard password in source files or screenshots. Rotate a key/password
+immediately if exposed.
 
-After saving app settings, restart the Web App and verify the encoder status
-and YouTube Studio. A running Azure Web App keeps streaming when your PC or
-phone is off, but deployments, platform maintenance, network failures, and
-YouTube interruptions can still disconnect the broadcast. `AUTO_START_STREAM`
-restarts it when the app process comes back; it does not prevent downtime.
-The default generated broadcast is ATG motion graphics, not a camera feed
-from your powered-off device. To broadcast your own video, provide a licensed
-video to the server and configure `VIDEO_PATH` as described above.
+Set **Always On** to **On** and keep the instance count at **1** so multiple
+app replicas do not broadcast to the same YouTube event. The Basic (B1) plan
+supports Always On. After deployment, open the **Default domain** from the
+Azure Web App overview, not a GitHub Pages URL.
+
+A running Azure Web App can keep streaming when your PC or phone is off, but
+deployments, platform maintenance, network failures, and YouTube interruptions
+can still disconnect the broadcast. `AUTO_START_STREAM=true` restarts it when
+the app process comes back; it does not prevent downtime. The default generated
+broadcast is ATG motion graphics, not a camera feed from your powered-off
+device. To broadcast your own video, provide a licensed video to the server and
+configure `VIDEO_PATH` as described above.
 
 ## Change or remove the server stream key
 
